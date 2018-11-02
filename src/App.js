@@ -24,7 +24,7 @@ class App extends Component {
         space : 0,
       }
     }
-    this.socket = new WebSocket('ws://10.110.110.236:3003');
+    this.socket = new WebSocket('ws://localhost:3003');
   }
 
   handleKeys(value, event) {
@@ -69,13 +69,24 @@ class App extends Component {
           collision: false
         })
       } else {
-        const state = JSON.parse(event.data)
+        const message = JSON.parse(event.data)
         const players = []
-        for (const player in state) {
-          players.push(state[player])
+        const bullets = []
+        if (message.bullets) {
+          for (const bullet in message.bullets) {
+            bullets.push(message.bullets[bullet])
+          }
+          for (const player in message.players) {
+            players.push(message.players[player])
+          }
+        } else {
+          for (const player in message) {
+            players.push(message[player])
+          }
         }
         this.setState({
-          players: players
+          players: players,
+          bullets: bullets
         })
 
         ctx.clearRect(0,0,1280,720)
@@ -95,6 +106,7 @@ class App extends Component {
           ctx.beginPath();
           ctx.lineWidth = 5;
           ctx.moveTo(player.position.x, player.position.y);
+
           if (player.orientation === 'left') {
             ctx.lineTo(player.position.x - 20, player.position.y)
           }
@@ -108,6 +120,14 @@ class App extends Component {
             ctx.lineTo(player.position.x, player.position.y + 20)
           }
           ctx.stroke()
+        }
+        if (bullets) {
+          for (let bullet of bullets) {
+            ctx.beginPath();
+            ctx.arc(bullet.position.x, bullet.position.y, 2, 0, 2 * Math.PI)
+            ctx.fill()
+          }
+
         }
 
       }
