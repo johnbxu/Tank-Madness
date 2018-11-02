@@ -24,14 +24,22 @@ class Bullet {
 const checkCollisionWith = (group1, group2) => {
   for (const ele in group1) {
     for (const ele2 in group2) {
-      if (group1[ele].id !== group2[ele2].id) {
+      if (group1[ele].id !== group2[ele2].id && group1[ele].id !== group2[ele2].owner) {
         if (checkCollision(group1[ele], group2[ele2])){
-          return true
+          const collision = {
+            object1: group1[ele],
+            object2: group2[ele2],
+            state: true,
+          }
+          // const id = group1[ele]
+          delete group1[ele];
+          delete group2[ele2];
+          return collision
         }
       }
     }
-
   }
+  return {state: false}
 }
 
 const checkCollision = (obj1, obj2) => {
@@ -43,6 +51,13 @@ const checkCollision = (obj1, obj2) => {
     return true;
   }
   return false;
+}
+
+const angle = (x1, y1, x2, y2) => {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  let theta = Math.atan2(dy, dx) + Math.PI
+  return theta
 }
 
 const express = require('express');
@@ -64,7 +79,9 @@ const wss = new SocketServer({ server });
 // Initializing the broadcast function
 wss.broadcast = function broadcast(data) {
   wss.clients.forEach(function each(client) {
-    client.send(data);
+    if (client.readyState === client.OPEN) {
+      client.send(data);
+    }
   });
 };
 
@@ -79,64 +96,99 @@ wss.on('connection', (ws) => {
   players[ws.id] = new Player(ws.id, random())
   setInterval(function() {
     wss.broadcast(JSON.stringify({
+      type: 'state',
       players: players,
-      bullets: bullets
+      bullets: bullets,
     }))
   }, 1000/60)
 
   ws.on('message', function incoming(data){
-    const movement = JSON.parse(data)
-    if (movement.left && players[ws.id].position.x > 0) {
-      players[ws.id].position.x -= 5
-      players[ws.id].orientation = 'left'
+    const message = JSON.parse(data)
+    if (message.type === 'respawn') {
+      players[ws.id] = new Player(ws.id, random())
+      ws.send(JSON.stringify({type: 'respawn'}))
     }
-    if (movement.right && players[ws.id].position.x < 1280) {
-      players[ws.id].position.x += 5
-      players[ws.id].orientation = 'right'
+    if (message.type === 'keys') {
+      const mousePos = {
+        x: message.mouse.x,
+        y: message.mouse.y,
+      }
+      const keyPress = message.keys
+      if (players[ws.id]) {
+        const turretOrientation = angle(players[ws.id].position.x, players[ws.id].position.y, mousePos.x, mousePos.y)
+        players[ws.id].turretOrientation = turretOrientation
+        if (keyPress.left && players[ws.id].position.x > 0) {
+          players[ws.id].position.x -= 5
+          players[ws.id].orientation = 'left'
+        }
+        if (keyPress.right && players[ws.id].position.x < 1280) {
+          players[ws.id].position.x += 5
+          players[ws.id].orientation = 'right'
+        }
+        if (keyPress.up && players[ws.id].position.y > 0) {
+          players[ws.id].position.y -= 5
+          players[ws.id].orientation = 'up'
+        }
+        if (keyPress.down && players[ws.id].position.y < 720) {
+          players[ws.id].position.y += 5
+          players[ws.id].orientation = 'down'
+        }
+        if (keyPress.space && !ws.bulletCooldown) {
+          const id = uuid()
+          const bullet = {
+            id: id,
+            owner: ws.id,
+            type: 'bullet',
+            position: {
+              x: players[ws.id].position.x,
+              y: players[ws.id].position.y
+            },
+            orientation: turretOrientation,
+          }
+          bullets[id] = bullet
+          ws.bulletCooldown = true
+          setTimeout(() => ws.bulletCooldown = false, 1000 / 2)
+        }
+        const playerCollision = checkCollisionWith(players, players)
+        const bulletCollision = checkCollisionWith(players, bullets)
+        if (playerCollision.state) {
+          const player1 = playerCollision.object1
+          const player2 = playerCollision.object2
+          const response = {
+            type: 'collision',
+            message: 'You collided with another player!'
+          }
+          wss.clients.forEach(function each(client){
+            if (client.id === player1.id || client.id === player2.id) {
+              client.send(JSON.stringify(response))
+            }
+          })
+        }
+        if (bulletCollision.state) {
+          const playerId = bulletCollision.object1.id
+          const hitByPlayerID = bulletCollision.object2.owner
+          const response = {
+            type: 'collision',
+            message: 'You were hit by player: ' + hitByPlayerID
+          }
+          wss.clients.forEach(function each(client){
+            if (client.id === playerId) {
+              client.send(JSON.stringify(response))
+            }
+          })
+        }
+        for (const bullet in bullets) {
+          bullets[bullet].position.x -= 10 * Math.sin(bullets[bullet].orientation + Math.PI /2)
+          bullets[bullet].position.y += 10 * Math.cos(bullets[bullet].orientation + Math.PI /2)
+          if (bullets[bullet].position.x < 0 || bullets[bullet].position.y < 0 || bullets[bullet].position.x > 1280 || bullets[bullet].position.y > 720) {
+            delete bullets[bullet]
+          }
+        }
+
     }
-    if (movement.up && players[ws.id].position.y > 0) {
-      players[ws.id].position.y -= 5
-      players[ws.id].orientation = 'up'
-    }
-    if (movement.down && players[ws.id].position.y < 720) {
-      players[ws.id].position.y += 5
-      players[ws.id].orientation = 'down'
-    }
-    if (movement.space) {
-      const id = uuid()
-      const bullet = {
-        id: id,
-        owner: ws.id,
-        type: 'bullet',
-        position: {
-          x: players[ws.id].position.x,
-          y: players[ws.id].position.y
-        },
-        orientation: players[ws.id].orientation,
-      }
-      bullets[id] = bullet
-    }
-    if (checkCollisionWith(players, players) || checkCollisionWith(players, bullets)) {
-      wss.broadcast('COLLISION!!!')
-    } else {
-      wss.broadcast('NO')
-    }
-    for (const bullet in bullets) {
-      if (bullets[bullet].orientation === 'up') {
-        bullets[bullet].position.y -= 10
-      }
-      if (bullets[bullet].orientation === 'down') {
-        bullets[bullet].position.y += 10
-      }
-      if (bullets[bullet].orientation === 'left') {
-        bullets[bullet].position.x -= 10
-      }
-      if (bullets[bullet].orientation === 'right') {
-        bullets[bullet].position.x += 10
-      }
-      if (bullets[bullet].position.x < 0 || bullets[bullet].position.y < 0 || bullets[bullet].position.x > 1280 || bullets[bullet].position.y > 720) {
-        delete bullets[bullet]
-      }
+
+
+
     }
   })
 
